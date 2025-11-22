@@ -6,20 +6,18 @@ const Stock = require('../models/Stock');
 // @route   POST /api/operations
 exports.createOperation = async (req, res) => {
   try {
-    const { type, items, sourceLocation, destinationLocation, scheduleDate, contact } = req.body;
+    const { type, items, sourceLocation, destinationLocation, scheduleDate, contact, status } = req.body;
 
     // 1. GENERATE REFERENCE (WH/IN/0001 or WH/OUT/0001)
-    // Find the last operation of this TYPE to increment ID
     const lastOp = await Operation.findOne({ type }).sort({ createdAt: -1 });
     
     let nextId = '0001';
     if (lastOp && lastOp.reference) {
-      const parts = lastOp.reference.split('/'); // e.g. ["WH", "IN", "0001"]
+      const parts = lastOp.reference.split('/'); 
       const lastNum = parseInt(parts[parts.length - 1]);
       nextId = (lastNum + 1).toString().padStart(4, '0');
     }
 
-    // Determine Prefix based on Type
     let prefix = 'WH/OPS';
     if (type === 'RECEIPT') prefix = 'WH/IN';
     else if (type === 'DELIVERY') prefix = 'WH/OUT';
@@ -27,16 +25,16 @@ exports.createOperation = async (req, res) => {
 
     const reference = `${prefix}/${nextId}`;
 
-    // 2. CHECK STOCK AVAILABILITY (For Deliveries)
-    // If we are delivering more than we have, mark as WAITING
-    let status = 'DRAFT';
-    
-    if (type === 'DELIVERY') {
-        // Loop through items to check availability (Simple check)
+    // 2. HANDLE STATUS LOGIC
+    let finalStatus = status || 'DRAFT';
+
+    // Optional: Auto-set to WAITING if stock is low for Deliveries
+    if (type === 'DELIVERY' && finalStatus !== 'DRAFT') {
         for (const item of items) {
             const stock = await Stock.findOne({ product: item.product, location: sourceLocation });
+            // If stock record doesn't exist OR quantity is less than requested
             if (!stock || stock.quantity < item.quantity) {
-                status = 'WAITING'; // Auto-set to Waiting if stock is low
+                finalStatus = 'WAITING'; 
             }
         }
     }
@@ -45,13 +43,13 @@ exports.createOperation = async (req, res) => {
     const operation = await Operation.create({
       reference,
       type,
-      status,
+      status: finalStatus,
       sourceLocation,
       destinationLocation,
       scheduleDate: scheduleDate || Date.now(),
       contact,
       items,
-      responsible: 'Admin' // In a real app, use req.user.name
+      responsible: 'Admin' // In a real app with auth middleware, use req.user.name
     });
 
     res.status(201).json(operation);
@@ -60,17 +58,19 @@ exports.createOperation = async (req, res) => {
   }
 };
 
-// @desc    Get All Operations (With Filters)
-// @route   GET /api/operations?type=RECEIPT
+// @desc    Get All Operations (List View)
+// @route   GET /api/operations
 exports.getOperations = async (req, res) => {
   try {
-    const { type, status, search } = req.query;
+    const { type, status, search, _id } = req.query;
     let query = {};
 
+    // Allow fetching single by query param if needed (though route param is better)
+    if (_id) query._id = _id; 
     if (type) query.type = type;
     if (status) query.status = status;
     
-    // Search by Reference or Contact
+    // Search Logic
     if (search) {
       query.$or = [
         { reference: { $regex: search, $options: 'i' } },
@@ -79,12 +79,64 @@ exports.getOperations = async (req, res) => {
     }
 
     const operations = await Operation.find(query)
-      .populate('items.product', 'name sku') // Get Product Details
+      .populate('items.product', 'name sku')
       .populate('sourceLocation', 'name')
       .populate('destinationLocation', 'name')
       .sort({ createdAt: -1 });
 
     res.json(operations);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Get Single Operation by ID (For Edit Form)
+// @route   GET /api/operations/:id
+exports.getOperationById = async (req, res) => {
+  try {
+    const operation = await Operation.findById(req.params.id)
+      .populate('items.product', 'name sku')
+      .populate('sourceLocation', 'name')
+      .populate('destinationLocation', 'name');
+
+    if (operation) {
+      res.json(operation);
+    } else {
+      res.status(404).json({ message: 'Operation not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc    Update Operation (Edit Draft)
+// @route   PUT /api/operations/:id
+exports.updateOperation = async (req, res) => {
+  try {
+    const operation = await Operation.findById(req.params.id);
+
+    if (!operation) {
+      return res.status(404).json({ message: 'Operation not found' });
+    }
+
+    if (operation.status === 'DONE') {
+      return res.status(400).json({ message: 'Cannot edit a DONE operation' });
+    }
+
+    // Update fields from request body
+    operation.contact = req.body.contact || operation.contact;
+    operation.scheduleDate = req.body.scheduleDate || operation.scheduleDate;
+    operation.sourceLocation = req.body.sourceLocation || operation.sourceLocation;
+    operation.destinationLocation = req.body.destinationLocation || operation.destinationLocation;
+    operation.items = req.body.items || operation.items;
+    
+    // Allow updating status (e.g. Draft -> Ready)
+    if (req.body.status) {
+        operation.status = req.body.status;
+    }
+
+    const updatedOperation = await operation.save();
+    res.json(updatedOperation);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -105,7 +157,6 @@ exports.validateOperation = async (req, res) => {
     }
 
     // 1. UPDATE STOCK LEVELS
-    // We need to loop through every item and update the Stock collection
     for (const item of operation.items) {
       let targetLocation = null;
       let quantityChange = 0;
