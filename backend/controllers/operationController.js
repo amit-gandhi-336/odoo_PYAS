@@ -142,11 +142,15 @@ exports.updateOperation = async (req, res) => {
   }
 };
 
+// ... existing imports
+
 // @desc    Validate Operation (The "DONE" Button)
 // @route   PUT /api/operations/:id/validate
 exports.validateOperation = async (req, res) => {
   try {
-    const operation = await Operation.findById(req.params.id);
+    const operation = await Operation.findById(req.params.id)
+      .populate('sourceLocation')
+      .populate('destinationLocation');
 
     if (!operation) {
       return res.status(404).json({ message: 'Operation not found' });
@@ -156,51 +160,72 @@ exports.validateOperation = async (req, res) => {
       return res.status(400).json({ message: 'Operation is already Validated' });
     }
 
-    // 1. UPDATE STOCK LEVELS
+    // 1. PROCESS STOCK MOVEMENTS
     for (const item of operation.items) {
-      let targetLocation = null;
-      let quantityChange = 0;
+      
+      // --- STEP A: SUBTRACT FROM SOURCE (If tracked) ---
+      // We track stock for WAREHOUSE and INTERNAL types.
+      // We do NOT track stock for VENDOR, CUSTOMER, or INVENTORY_LOSS (they are infinite sinks/sources).
+      const isSourceTracked = ['WAREHOUSE', 'INTERNAL'].includes(operation.sourceLocation.type);
+      const isDestTracked = ['WAREHOUSE', 'INTERNAL'].includes(operation.destinationLocation.type);
 
-      // LOGIC: Receipt adds to Dest, Delivery removes from Source
-      if (operation.type === 'RECEIPT') {
-        targetLocation = operation.destinationLocation;
-        quantityChange = item.quantity;
-      } else if (operation.type === 'DELIVERY') {
-        targetLocation = operation.sourceLocation;
-        quantityChange = -item.quantity;
-      }
-
-      if (targetLocation) {
-        // Find existing stock record or create one
-        let stock = await Stock.findOne({ 
+      if (isSourceTracked) {
+        let sourceStock = await Stock.findOne({ 
           product: item.product, 
-          location: targetLocation 
+          location: operation.sourceLocation._id 
         });
 
-        if (!stock) {
-            stock = new Stock({ 
+        if (!sourceStock || sourceStock.quantity < item.quantity) {
+            return res.status(400).json({ 
+                message: `Insufficient stock at source (${operation.sourceLocation.name}) for product ID: ${item.product}` 
+            });
+        }
+
+        sourceStock.quantity -= item.quantity;
+        await sourceStock.save();
+      }
+
+      // --- STEP B: ADD TO DESTINATION (If tracked) ---
+      if (isDestTracked) {
+        let destStock = await Stock.findOne({ 
+          product: item.product, 
+          location: operation.destinationLocation._id 
+        });
+
+        if (!destStock) {
+            destStock = new Stock({ 
                 product: item.product, 
-                location: targetLocation, 
+                location: operation.destinationLocation._id, 
                 quantity: 0 
             });
         }
 
-        // Check for negative stock (Prevent shipping what you don't have)
-        if (stock.quantity + quantityChange < 0) {
-            return res.status(400).json({ 
-                message: `Insufficient stock for product ID: ${item.product}` 
-            });
-        }
+        destStock.quantity += item.quantity;
+        await destStock.save();
+      }
 
-        stock.quantity += quantityChange;
-        await stock.save();
-        
-        // Also update the global "On Hand" cache in Product model
-        const product = await Product.findById(item.product);
-        if(product) {
-            product.totalStock = (product.totalStock || 0) + quantityChange;
-            await product.save();
-        }
+      // --- STEP C: UPDATE GLOBAL PRODUCT CACHE ---
+      // Only change totalStock if items enter/leave the tracked ecosystem.
+      
+      let totalChange = 0;
+
+      // Entering the system (From Vendor -> Warehouse)
+      if (!isSourceTracked && isDestTracked) {
+          totalChange = item.quantity;
+      }
+      // Leaving the system (From Warehouse -> Customer)
+      else if (isSourceTracked && !isDestTracked) {
+          totalChange = -item.quantity;
+      }
+      // Internal Transfer (Warehouse -> Warehouse)
+      // isSourceTracked && isDestTracked -> totalChange = 0
+
+      if (totalChange !== 0) {
+          const product = await Product.findById(item.product);
+          if (product) {
+              product.totalStock = (product.totalStock || 0) + totalChange;
+              await product.save();
+          }
       }
     }
 

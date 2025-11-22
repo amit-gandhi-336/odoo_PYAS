@@ -10,6 +10,7 @@ import Deliveries from './pages/Deliveries';
 import OperationForm from './pages/OperationForm';
 import Stock from './pages/Stock';
 import History from './pages/History';
+import Settings from './pages/Settings';
 
 // --- 1. PROTECTED ROUTE COMPONENT ---
 const ProtectedRoute = () => {
@@ -37,10 +38,6 @@ const Layout = () => {
     </div>
   );
 };
-
-// --- 3. TEMPORARY PLACEHOLDERS (Until we build these pages) ---
-const Operations = () => <div className="hero min-h-[50vh]"><div className="hero-content text-center"><h1 className="text-3xl font-bold">Operations List (Coming Soon)</h1></div></div>;
-const Settings = () => <div className="hero min-h-[50vh]"><div className="hero-content text-center"><h1 className="text-3xl font-bold">Settings (Coming Soon)</h1></div></div>;
 
 function App() {
   return (

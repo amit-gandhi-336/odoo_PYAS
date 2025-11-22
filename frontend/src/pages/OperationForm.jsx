@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../api/axios';
 import { AuthContext } from '../context/AuthContext';
 import toast from 'react-hot-toast';
-import { Save, CheckCircle, Printer, Plus, Trash2, Calendar, User as UserIcon, MapPin, ChevronLeft, ArrowRight } from 'lucide-react';
+import { Save, CheckCircle, Printer, Plus, Trash2, Calendar, User as UserIcon, MapPin, ChevronLeft, Box } from 'lucide-react';
 
 const OperationForm = () => {
   const { user } = useContext(AuthContext);
@@ -30,18 +30,15 @@ const OperationForm = () => {
   const { data: locations } = useQuery({ queryKey: ['locations'], queryFn: () => api.get('/locations').then(res => res.data) });
   const { data: products } = useQuery({ queryKey: ['products'], queryFn: () => api.get('/products').then(res => res.data) });
   
-  // FIX: Fetch Single Operation using correct ID endpoint
   const { data: existingOp } = useQuery({
     queryKey: ['operation', id],
     queryFn: () => api.get(`/operations/${id}`).then(res => res.data),
     enabled: isEditMode,
   });
 
-  // FIX: Update State ONLY when data arrives
   useEffect(() => {
     if (existingOp) {
       setFormData({
-        // Handle both populated objects ( {_id, name} ) and raw IDs
         sourceLocation: existingOp.sourceLocation?._id || existingOp.sourceLocation,
         destinationLocation: existingOp.destinationLocation?._id || existingOp.destinationLocation,
         scheduleDate: existingOp.scheduleDate ? existingOp.scheduleDate.split('T')[0] : new Date().toISOString().split('T')[0],
@@ -59,9 +56,38 @@ const OperationForm = () => {
     }
   }, [existingOp]);
 
-  // Filter Locations
+  // --- HELPER: Format Location Name ---
+  const formatLocationOption = (loc) => {
+    if (loc.type === 'INTERNAL' && loc.parentLocation) {
+        // If it's a shelf, show "Shelf (Warehouse)"
+        // Note: This requires the backend /locations endpoint to populate 'parentLocation'
+        // If parentLocation is just an ID string, we find it in the list.
+        let parentName = 'Unknown WH';
+        if (typeof loc.parentLocation === 'object') {
+            parentName = loc.parentLocation.name;
+        } else {
+            const parent = locations?.find(l => l._id === loc.parentLocation);
+            if (parent) parentName = parent.name;
+        }
+        return `${loc.name} (${parentName})`;
+    }
+    // Otherwise just show Name
+    return loc.name;
+  };
+
+  // --- FILTER LOCATIONS LOGIC ---
   const warehouses = locations?.filter(l => l.type === 'WAREHOUSE') || [];
+  const subLocations = locations?.filter(l => l.type === 'INTERNAL') || [];
   const partners = locations?.filter(l => l.type === (type === 'RECEIPT' ? 'VENDOR' : 'CUSTOMER')) || [];
+
+  const sourceOptions = type === 'RECEIPT' 
+    ? [...partners, ...warehouses, ...subLocations] 
+    : [...warehouses, ...subLocations];
+
+  const destOptions = type === 'RECEIPT' 
+    ? [...warehouses, ...subLocations] 
+    : [...partners, ...warehouses, ...subLocations];
+
 
   // --- MUTATIONS ---
   const mutation = useMutation({
@@ -71,10 +97,8 @@ const OperationForm = () => {
     onSuccess: (data) => {
       toast.success(isEditMode ? 'Operation Updated' : 'Draft Created');
       if (!isEditMode) {
-        // Redirect to Edit Mode
         navigate(`/operations/${data.data._id}?type=${type}`);
       } else {
-        // If editing, just update local status
         if(data.data.status) setStatus(data.data.status);
       }
       queryClient.invalidateQueries(['operation', id]);
@@ -93,13 +117,12 @@ const OperationForm = () => {
     onError: (err) => toast.error(err.response?.data?.message || "Validation Failed")
   });
 
-  // --- HANDLER: SAVE (Sets to READY) ---
+  // --- HANDLERS ---
   const handleSave = (e) => {
     e.preventDefault();
 
-    if (type === 'RECEIPT' && !formData.sourceLocation) return toast.error("Please select a Vendor");
-    if (type === 'RECEIPT' && !formData.destinationLocation) return toast.error("Please select a Warehouse");
-    
+    if (!formData.sourceLocation) return toast.error("Please select a Source");
+    if (!formData.destinationLocation) return toast.error("Please select a Destination");
     if (items.some(i => !i.product)) return toast.error("Please select products");
 
     // Find Partner Name
@@ -111,7 +134,7 @@ const OperationForm = () => {
       type,
       contact: contactName,
       ...formData,
-      status: 'READY', // <--- Force status to READY on save
+      status: 'READY',
       items
     };
 
@@ -132,10 +155,12 @@ const OperationForm = () => {
 
   // Styles
   const inputClass = "input w-full bg-white border border-slate-300 focus:border-slate-800 focus:ring-4 focus:ring-slate-800/10 rounded-xl text-slate-900 font-bold shadow-sm";
-  
+  const selectClass = "select w-full bg-white border border-slate-300 focus:border-slate-800 focus:ring-4 focus:ring-slate-800/10 rounded-xl text-slate-900 font-bold shadow-sm";
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-20">
       
+      {/* --- HEADER --- */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div className="flex items-center gap-4">
           <button onClick={() => navigate(-1)} className="btn btn-circle btn-ghost btn-sm text-slate-500 hover:bg-slate-200">
@@ -151,7 +176,7 @@ const OperationForm = () => {
               </span>
             </div>
             <p className="text-slate-500 font-medium text-sm mt-1">
-              {type === 'RECEIPT' ? 'Vendor Bill · Incoming' : 'Customer Note · Outgoing'}
+              {type === 'RECEIPT' ? 'Incoming Stock Movement' : 'Outgoing Stock Movement'}
             </p>
           </div>
         </div>
@@ -186,7 +211,7 @@ const OperationForm = () => {
         </div>
       </div>
 
-      {/* Pipeline */}
+      {/* --- PIPELINE --- */}
       <div className="w-full bg-white/60 backdrop-blur-xl border border-white/60 rounded-2xl p-4 shadow-sm overflow-x-auto">
         <ul className="steps w-full">
           {pipeline.map((step, index) => {
@@ -204,30 +229,33 @@ const OperationForm = () => {
         </ul>
       </div>
 
-      {/* Form Body */}
+      {/* --- FORM BODY --- */}
       <div className="card bg-white/80 backdrop-blur-xl shadow-xl border border-white/60 rounded-3xl overflow-visible">
         <div className="card-body p-8">
           
           <div className="grid md:grid-cols-2 gap-8 mb-8">
+            
             {/* Left Col: LOCATIONS */}
             <div className="space-y-4">
               
               {/* Source Location */}
               <div className="form-control">
                 <label className="label text-xs font-bold uppercase text-slate-500">
-                   {type === 'RECEIPT' ? 'Receive From (Vendor)' : 'Ship From (Warehouse)'}
+                   {type === 'RECEIPT' ? 'Receive From (Source)' : 'Pick From (Source)'}
                 </label>
                 <div className="relative">
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
                   <select 
-                    className={`${inputClass} pl-10`}
+                    className={`${selectClass} pl-10`}
                     value={formData.sourceLocation}
                     onChange={e => setFormData({...formData, sourceLocation: e.target.value})}
                     disabled={isDone}
                   >
                     <option value="" disabled>Select Source...</option>
-                    {(type === 'RECEIPT' ? partners : warehouses).map(l => (
-                      <option key={l._id} value={l._id}>{l.name}</option>
+                    {sourceOptions.map(l => (
+                      <option key={l._id} value={l._id}>
+                        {formatLocationOption(l)}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -236,19 +264,21 @@ const OperationForm = () => {
               {/* Destination Location */}
               <div className="form-control">
                 <label className="label text-xs font-bold uppercase text-slate-500">
-                   {type === 'RECEIPT' ? 'Destination (Warehouse)' : 'Deliver To (Customer)'}
+                   {type === 'RECEIPT' ? 'Store To (Destination)' : 'Deliver To (Destination)'}
                 </label>
                 <div className="relative">
-                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
+                  <Box className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={18} />
                   <select 
-                    className={`${inputClass} pl-10`}
+                    className={`${selectClass} pl-10`}
                     value={formData.destinationLocation}
                     onChange={e => setFormData({...formData, destinationLocation: e.target.value})}
                     disabled={isDone}
                   >
                     <option value="" disabled>Select Destination...</option>
-                    {(type === 'RECEIPT' ? warehouses : partners).map(l => (
-                      <option key={l._id} value={l._id}>{l.name}</option>
+                    {destOptions.map(l => (
+                      <option key={l._id} value={l._id}>
+                        {formatLocationOption(l)}
+                      </option>
                     ))}
                   </select>
                 </div>
