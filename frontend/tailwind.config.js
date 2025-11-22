@@ -1,5 +1,7 @@
+import daisyui from "daisyui"
+
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,6 +10,9 @@ module.exports = {
     extend: {},
   },
   plugins: [
-    require('daisyui')
+    daisyui,
   ],
+  daisyui: {
+    themes: ["light"], // Forces light mode so it matches your wireframes
+  },
 }
