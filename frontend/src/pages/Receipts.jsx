@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../api/axios';
-import { Plus, Search, Filter, Loader2, Package, Calendar, ArrowRight, MapPin, User } from 'lucide-react';
+import { Plus, Search, Filter, Loader2, Package, Calendar, ArrowRight, MapPin } from 'lucide-react';
 
 const Receipts = () => {
   const [search, setSearch] = useState('');
@@ -24,16 +24,20 @@ const Receipts = () => {
     }
   };
 
-  // Helper to format location like "WH / Stock1"
-  const formatLocation = (loc) => {
-    if (!loc) return 'Unknown';
-    // If it has a parent (e.g. Stock1 inside Main Warehouse)
-    // Ideally backend populates parentLocation, but if not, we show Name (ShortCode)
-    // Let's use ShortCode if available for the "Wireframe Look"
+  // --- HELPER: Format Location Hierarchically (WH/Stock1) ---
+  const formatDestination = (loc) => {
+    if (!loc) return '-';
     
-    // Since our populate might be shallow (just name/shortCode), we simulate the "WH/Loc" format
-    // using the ShortCode field if it exists.
-    return loc.shortCode ? loc.shortCode : loc.name;
+    // Case 1: It has a parent location populated (e.g. Shelf inside Warehouse)
+    if (loc.parentLocation) {
+        const parentCode = loc.parentLocation.shortCode || loc.parentLocation.name;
+        const myCode = loc.shortCode || loc.name;
+        return `${parentCode}/${myCode}`;
+    }
+    
+    // Case 2: It is a top-level warehouse (e.g. Main Warehouse)
+    // Just show its shortCode
+    return loc.shortCode || loc.name;
   };
 
   return (
@@ -60,7 +64,7 @@ const Receipts = () => {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
           <input 
             type="text" 
-            placeholder="Search reference..." 
+            placeholder="Search reference or contact..." 
             className="input w-full pl-10 bg-transparent border-transparent focus:bg-white/50 focus:border-white rounded-xl transition-all placeholder:text-slate-400"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -78,8 +82,9 @@ const Receipts = () => {
             <thead className="bg-slate-50/50 border-b border-slate-200">
               <tr>
                 <th className="py-4 pl-6 text-xs font-bold uppercase tracking-wider text-slate-500">Reference</th>
-                <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">From (Vendor)</th>
-                <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">To (Warehouse)</th>
+                <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">From</th>
+                <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">To</th>
+                {/* Removed Contact Column as requested */}
                 <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Date</th>
                 <th className="py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status</th>
                 <th className="py-4 pr-6 text-right text-xs font-bold uppercase tracking-wider text-slate-500">Action</th>
@@ -99,24 +104,22 @@ const Receipts = () => {
                       {receipt.reference}
                     </td>
 
-                    {/* From */}
+                    {/* From (Combined Contact/Source) */}
                     <td className="py-4">
                       <div className="flex items-center gap-2">
-                        <User size={14} className="text-slate-400" />
                         <span className="text-slate-600 font-medium text-sm">
-                          {/* Show Contact Name (Vendor) OR Location Name */}
-                          {receipt.contact || formatLocation(receipt.sourceLocation)}
+                          {/* Logic: If contact exists (Vendor Name), show it. Else show Source Location Name */}
+                          {receipt.contact || receipt.sourceLocation?.name || 'Unknown'}
                         </span>
                       </div>
                     </td>
 
-                    {/* To (Formatted as WH/Loc) */}
+                    {/* To (Formatted WH/Loc) */}
                     <td className="py-4">
                       <div className="flex items-center gap-2">
                         <MapPin size={14} className="text-slate-400" />
-                        <span className="text-slate-600 font-medium text-sm font-mono bg-slate-100 px-2 py-1 rounded-md">
-                          {/* This simulates the "WH/Stock1" format */}
-                          {formatLocation(receipt.destinationLocation)}
+                        <span className="text-slate-600 font-medium text-sm font-mono bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
+                          {formatDestination(receipt.destinationLocation)}
                         </span>
                       </div>
                     </td>
